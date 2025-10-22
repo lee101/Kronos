@@ -53,6 +53,8 @@
 *   🚩 **[2025.08.17]** We have released the scripts for fine-tuning! Check them out to adapt Kronos to your own tasks.
 *   🚩 **[2025.08.02]** Our paper is now available on [arXiv](https://arxiv.org/abs/2508.02739)!
 
+> ⚙️ **Default inference speed-ups** — Kronos' autoregressive decoder now runs inside `torch.inference_mode()` and automatically enables CUDA TF32 matmuls and Flash / memory-efficient SDP kernels when the hardware supports them. Mixed-precision autocast remains opt-in so baseline forecasts stay in float32 for accuracy-sensitive evaluation.
+
 <p align="center">
 
 ## 📜 Introduction

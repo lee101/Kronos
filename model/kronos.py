@@ -1,3 +1,4 @@
+import logging
 import numpy as np
 import pandas as pd
 import torch
@@ -7,7 +8,58 @@ import sys
 from tqdm import trange
 
 sys.path.append("../")
-from model.module import *
+from .module import *
+
+logger = logging.getLogger(__name__)
+_FAST_TORCH_SETTINGS_CONFIGURED = False
+
+
+def _maybe_enable_fast_torch_settings() -> None:
+    global _FAST_TORCH_SETTINGS_CONFIGURED
+    if _FAST_TORCH_SETTINGS_CONFIGURED:
+        return
+    _FAST_TORCH_SETTINGS_CONFIGURED = True
+
+    try:
+        if hasattr(torch.backends, "cudnn"):
+            try:
+                torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.debug("Unable to enable cuDNN TF32: %s", exc)
+        if hasattr(torch.backends, "cuda"):
+            try:
+                torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore[attr-defined]
+                torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True  # type: ignore[attr-defined]
+            except Exception as exc:
+                logger.debug("Unable to enable CUDA matmul fast paths: %s", exc)
+            try:
+                enable_flash = getattr(torch.backends.cuda, "enable_flash_sdp", None)
+                if callable(enable_flash):
+                    enable_flash(True)
+                enable_mem = getattr(torch.backends.cuda, "enable_mem_efficient_sdp", None)
+                if callable(enable_mem):
+                    enable_mem(True)
+                enable_math = getattr(torch.backends.cuda, "enable_math_sdp", None)
+                if callable(enable_math):
+                    enable_math(False)
+            except Exception as exc:
+                logger.debug("Unable to configure scaled dot product kernels: %s", exc)
+    except Exception as exc:
+        logger.debug("Torch backend optimisation setup failed: %s", exc)
+
+    try:
+        set_precision = getattr(torch, "set_float32_matmul_precision", None)
+        if callable(set_precision):
+            set_precision("high")
+    except Exception as exc:
+        logger.debug("Unable to set float32 matmul precision: %s", exc)
+
+
+def _inference_context():
+    context_ctor = getattr(torch, "inference_mode", None)
+    if callable(context_ctor):
+        return context_ctor()
+    return torch.no_grad()
 
 
 class KronosTokenizer(nn.Module, PyTorchModelHubMixin):
@@ -387,7 +439,8 @@ def sample_from_logits(logits, temperature=1.0, top_k=None, top_p=None, sample_l
 
 
 def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context, pred_len, clip=5, T=1.0, top_k=0, top_p=0.99, sample_count=5, verbose=False):
-    with torch.no_grad():
+    _maybe_enable_fast_torch_settings()
+    with _inference_context():
         batch_size = x.size(0)
         initial_seq_len = x.size(1)
         x = torch.clip(x, -clip, clip)
@@ -435,7 +488,7 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
             torch.cuda.empty_cache()
 
         input_tokens = [t[:, -max_context:].contiguous() for t in x_token]
-        z = tokenizer.decode(input_tokens, half=True)
+        z = tokenizer.decode(input_tokens, half=True).to(dtype=torch.float32)
         z = z.reshape(batch_size, sample_count, z.size(1), z.size(2))
         preds = z.cpu().numpy()
         preds = np.mean(preds, axis=1)
