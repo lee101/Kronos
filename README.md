@@ -146,7 +146,7 @@ x_timestamp = df.loc[:lookback-1, 'timestamps']
 y_timestamp = df.loc[lookback:lookback+pred_len-1, 'timestamps']
 ```
 
-#### 4. Generate Forecasts
+#### 4. Generate Forecasts 
 
 Call the `predict` method to generate forecasts. You can control the sampling process with parameters like `T`, `top_p`, and `sample_count` for probabilistic forecasting.
 
@@ -326,6 +326,7 @@ If you use Kronos in your research, we would appreciate a citation to our [paper
 
 ## 📜 License 
 This project is licensed under the [MIT License](./LICENSE).
+
 
 
 
