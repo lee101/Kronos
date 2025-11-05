@@ -4,6 +4,7 @@ import pandas as pd
 import torch
 from huggingface_hub import PyTorchModelHubMixin
 import sys
+from typing import Set
 
 from tqdm import trange
 
@@ -12,6 +13,7 @@ from .module import *
 
 logger = logging.getLogger(__name__)
 _FAST_TORCH_SETTINGS_CONFIGURED = False
+_WARMED_DEVICES: Set[str] = set()
 
 
 def _maybe_enable_fast_torch_settings() -> None:
@@ -60,6 +62,18 @@ def _inference_context():
     if callable(context_ctor):
         return context_ctor()
     return torch.no_grad()
+
+
+def _ensure_device_warm(device: torch.device) -> None:
+    if device.type != "cuda":
+        return
+    if not torch.cuda.is_available():
+        return
+    device_key = str(device)
+    if device_key in _WARMED_DEVICES:
+        return
+    torch.empty(0, device=device)
+    _WARMED_DEVICES.add(device_key)
 
 
 class KronosTokenizer(nn.Module, PyTorchModelHubMixin):
@@ -446,6 +460,7 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
         x = torch.clip(x, -clip, clip)
 
         device = x.device
+        _ensure_device_warm(device)
         x = x.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x.size(1), x.size(2)).to(device)
         x_stamp = x_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, x_stamp.size(1), x_stamp.size(2)).to(device)
         y_stamp = y_stamp.unsqueeze(1).repeat(1, sample_count, 1, 1).reshape(-1, y_stamp.size(1), y_stamp.size(2)).to(device)
@@ -484,8 +499,6 @@ def auto_regressive_inference(tokenizer, model, x, x_stamp, y_stamp, max_context
 
             x_token[0] = torch.cat([x_token[0], sample_pre], dim=1)
             x_token[1] = torch.cat([x_token[1], sample_post], dim=1)
-
-            torch.cuda.empty_cache()
 
         input_tokens = [t[:, -max_context:].contiguous() for t in x_token]
         z = tokenizer.decode(input_tokens, half=True).to(dtype=torch.float32)
